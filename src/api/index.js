@@ -115,7 +115,14 @@ export const kgApi = {
         } catch (error) {
             onError && onError(error.message)
         }
+    },
+
+    // 执行Cypher查询
+    executeQuery(cypher) {
+        return api.post('/query', { cypher })
     }
+
+
 }
 
 export default kgApi
