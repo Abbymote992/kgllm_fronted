@@ -39,13 +39,13 @@
           />
         </div>
 
-        <!-- 右侧聊天界面 -->
         <div class="chat-area">
           <ChatInterface
+              v-if="true"
               ref="chatInterfaceRef"
-              :key="currentConversationId"
-              :initialConversation="selectedConversation"
-              @conversation-saved="onConversationSaved"
+          :key="currentConversationId"
+          :initialConversation="selectedConversation"
+          @conversation-saved="onConversationSaved"
           />
         </div>
       </div>
@@ -70,10 +70,28 @@ const historyPanelRef = ref(null)
 const selectedConversation = ref(null)
 const currentConversationId = ref(null)
 
-// 加载历史对话
 const loadConversation = (conversation) => {
-  selectedConversation.value = conversation
-  currentConversationId.value = conversation.id
+  console.log('=== App.vue loadConversation ===')
+  console.log('conversation:', conversation)
+  console.log('chatInterfaceRef.value:', chatInterfaceRef.value)
+  console.log('chatInterfaceRef.value 的类型:', typeof chatInterfaceRef.value)
+
+  if (chatInterfaceRef.value) {
+    console.log('可用的方法:', Object.keys(chatInterfaceRef.value))
+  }
+
+  if (conversation) {
+    selectedConversation.value = conversation
+    currentConversationId.value = conversation.id
+
+    if (chatInterfaceRef.value && typeof chatInterfaceRef.value.loadConversation === 'function') {
+      console.log('调用 loadConversation')
+      chatInterfaceRef.value.loadConversation(conversation)
+    } else {
+      console.error('loadConversation 方法不存在！')
+      console.error('chatInterfaceRef.value 的内容:', chatInterfaceRef.value)
+    }
+  }
 }
 
 // 新建对话
