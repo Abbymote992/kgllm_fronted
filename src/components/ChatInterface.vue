@@ -5,9 +5,9 @@
       <h3>💬 智能问答</h3>
       <div class="mode-selector">
         <el-radio-group v-model="requestMode" size="small">
-          <el-radio-button label="sync">同步模式</el-radio-button>
+<!--          <el-radio-button label="sync">同步模式</el-radio-button>-->
           <el-radio-button label="stream">流式模式</el-radio-button>
-          <el-radio-button label="async">异步模式</el-radio-button>
+<!--          <el-radio-button label="async">异步模式</el-radio-button>-->
           <el-radio-button label="multi-agent">🤖 多智能体</el-radio-button>
         </el-radio-group>
       </div>
