@@ -1,4 +1,3 @@
-<!-- frontend-vue/src/components/KnowledgeGraph.vue -->
 <template>
   <div class="graph-container">
     <div class="graph-header">
@@ -12,27 +11,97 @@
           <el-radio-button value="dagre">层次布局</el-radio-button>
           <el-radio-button value="radial">径向布局</el-radio-button>
         </el-radio-group>
-        <el-button size="small" @click="fitView" :icon="ZoomIn">适应画布</el-button>
-        <el-button size="small" @click="resetZoom" :icon="RefreshRight">重置</el-button>
-        <el-button size="small" @click="refreshData" :icon="Refresh" :loading="loading">刷新</el-button>
+        <el-button size="small" @click="fitView">适应画布</el-button>
+        <el-button size="small" @click="resetZoom">重置</el-button>
+        <el-button size="small" @click="refreshData" :loading="loading">刷新</el-button>
       </div>
     </div>
-    <div ref="graphRef" class="graph-content"></div>
+
+    <div class="main-content">
+      <div ref="graphRef" class="graph-content"></div>
+
+      <div class="side-panel">
+        <div v-if="!selectedElement" class="panel-section">
+          <h4>📊 Overview</h4>
+          <div class="overview-content">
+            <div class="stat-row">
+              <span class="stat-label">节点总数:</span>
+              <span class="stat-value">{{ nodeCount }}</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-label">关系总数:</span>
+              <span class="stat-value">{{ edgeCount }}</span>
+            </div>
+            <div class="node-labels">
+              <div class="labels-header">Node labels</div>
+              <div v-for="(count, label) in nodeLabelCounts" :key="label" class="label-item">
+                <span class="label-color" :style="{ background: nodeColors[label] }"></span>
+                <span class="label-name">{{ label }}</span>
+                <span class="label-count">({{ count }})</span>
+              </div>
+            </div>
+            <div class="relation-types">
+              <div class="labels-header">Relationship types</div>
+              <div v-for="(count, relType) in relationTypeCounts" :key="relType" class="relation-item">
+                <span class="relation-name">{{ relType }}</span>
+                <span class="relation-count">({{ count }})</span>
+              </div>
+            </div>
+            <div class="hint-text">💡 鼠标悬浮查看详情，点击固定</div>
+          </div>
+        </div>
+
+        <div v-else class="panel-section">
+          <div class="detail-header">
+            <h4>{{ selectedElement.type === 'node' ? '📍 Node properties' : '🔗 Relationship properties' }}</h4>
+            <el-button size="small" @click="clearSelection">关闭</el-button>
+          </div>
+          <div class="detail-content">
+            <div class="detail-row">
+              <span class="detail-label">ID:</span>
+              <span class="detail-value">{{ selectedElement.id }}</span>
+            </div>
+            <div v-if="selectedElement.type === 'node'" class="detail-row">
+              <span class="detail-label">Label:</span>
+              <span class="detail-value">{{ selectedElement.label }}</span>
+            </div>
+            <div v-if="selectedElement.type === 'edge'" class="detail-row">
+              <span class="detail-label">Type:</span>
+              <span class="detail-value">{{ selectedElement.relationType }}</span>
+            </div>
+            <div v-if="selectedElement.type === 'edge'" class="detail-row">
+              <span class="detail-label">Source:</span>
+              <span class="detail-value">{{ selectedElement.sourceName }}</span>
+            </div>
+            <div v-if="selectedElement.type === 'edge'" class="detail-row">
+              <span class="detail-label">Target:</span>
+              <span class="detail-value">{{ selectedElement.targetName }}</span>
+            </div>
+            <div v-if="selectedElement.properties" class="properties-section">
+              <div class="properties-header">Properties</div>
+              <div v-for="(value, key) in selectedElement.properties" :key="key" class="property-row">
+                <span class="property-key">{{ key }}</span>
+                <span class="property-value">{{ formatPropertyValue(value) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="loading" class="loading-overlay">
-      <el-icon class="is-loading"><Loading /></el-icon>
       <span>加载图谱数据...</span>
     </div>
+
     <div v-if="nodeCount > 0" class="stats">
-      <el-tag size="small">节点: {{ nodeCount }}</el-tag>
-      <el-tag size="small" type="success">关系: {{ edgeCount }}</el-tag>
+      <span>节点: {{ nodeCount }}</span>
+      <span>关系: {{ edgeCount }}</span>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Loading, ZoomIn, RefreshRight, Refresh } from '@element-plus/icons-vue'
+import { ref, onMounted, onUnmounted, reactive } from 'vue'
 import G6 from '@antv/g6'
 import { kgApi } from '../api'
 
@@ -41,63 +110,34 @@ const loading = ref(false)
 const layoutType = ref('force')
 const nodeCount = ref(0)
 const edgeCount = ref(0)
+const nodeLabelCounts = reactive({})
+const relationTypeCounts = reactive({})
+const selectedElement = ref(null)
+
 let graph = null
 
-// 节点颜色映射
 const nodeColors = {
-  Project: '#1890ff',
-  Material: '#52c41a',
-  Supplier: '#eb2f96',
-  Inventory: '#faad14',
-  PurchaseOrder: '#722ed1'
+  Project: '#7B9ADF',
+  Material: '#7CB97C',
+  Supplier: '#D68AB5',
+  Inventory: '#E5C07B',
+  PurchaseOrder: '#9D7CC9',
+  WorkOrder: '#56B4E9',
+  RiskEvent: '#E79A9A',
+  Module: '#A3A3A3',
+  Warehouse: '#C4A35A'
 }
 
-// 节点图标映射
-const nodeIcons = {
-  Project: '📁',
-  Material: '🔧',
-  Supplier: '🏭',
-  Inventory: '📦',
-  PurchaseOrder: '📄'
-}
-
-// 布局配置
 const layouts = {
-  force: {
-    type: 'force',
-    preventOverlap: true,
-    nodeSpacing: 80,
-    linkDistance: 200,
-    edgeStrength: 0.8,
-    nodeStrength: -100,
-    alpha: 0.3,
-    alphaDecay: 0.028,
-    alphaMin: 0.01,
-    collideStrength: 0.8,
-    force: 'center'
-  },
-  dagre: {
-    type: 'dagre',
-    rankdir: 'LR',
-    align: 'UL',
-    nodesep: 60,
-    ranksep: 100
-  },
-  radial: {
-    type: 'radial',
-    unitRadius: 120,
-    preventOverlap: true,
-    nodeSize: 60,
-    linkDistance: 100
-  }
+  force: { type: 'force', preventOverlap: true, nodeSpacing: 80, linkDistance: 200 },
+  dagre: { type: 'dagre', rankdir: 'LR', align: 'UL', nodesep: 60, ranksep: 100 },
+  radial: { type: 'radial', unitRadius: 120, preventOverlap: true }
 }
 
-// 文本换行函数
 const wrapText = (text, maxWidth = 8) => {
   if (!text) return ''
   const str = String(text)
   if (str.length <= maxWidth) return str
-
   const lines = []
   let line = ''
   for (let i = 0; i < str.length; i++) {
@@ -111,108 +151,132 @@ const wrapText = (text, maxWidth = 8) => {
   return lines.join('\n')
 }
 
+const formatPropertyValue = (value) => {
+  if (value === null || value === undefined) return 'null'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+const clearSelection = () => {
+  selectedElement.value = null
+}
+
+const getNodeName = (nodeId, nodes) => {
+  const node = nodes.find(n => String(n.id) === String(nodeId))
+  return node ? node.originalLabel || node.label : nodeId
+}
+
 const loadData = async () => {
   loading.value = true
+  selectedElement.value = null
   try {
-    const res = await kgApi.getGraphData(100)
+    const res = await kgApi.getGraphData(200)
     const data = res.data
 
     nodeCount.value = data.nodes.length
     edgeCount.value = data.edges.length
 
-    if (!data.nodes.length) {
-      ElMessage.warning('暂无图谱数据，请先导入数据')
-      return
-    }
+    Object.keys(nodeLabelCounts).forEach(key => delete nodeLabelCounts[key])
+    data.nodes.forEach(node => {
+      const label = node.label || node.type || 'Unknown'
+      nodeLabelCounts[label] = (nodeLabelCounts[label] || 0) + 1
+    })
 
-    // 转换数据格式 - 圆形节点
-    const nodes = data.nodes.map(node => {
-      // 获取显示名称
+    Object.keys(relationTypeCounts).forEach(key => delete relationTypeCounts[key])
+    data.edges.forEach(edge => {
+      const relType = edge.label || 'UNKNOWN'
+      relationTypeCounts[relType] = (relationTypeCounts[relType] || 0) + 1
+    })
+
+    const nodeIdSet = new Set()
+    const nodes = data.nodes.map((node, index) => {
       let displayName = node.properties?.name || node.label || node.type || '未知'
-      // 限制长度并换行
       const wrappedName = wrapText(displayName, 8)
-
+      const nodeType = node.label || node.type || 'Unknown'
+      
+      // 确保节点ID唯一
+      let nodeId = String(node.id)
+      if (nodeIdSet.has(nodeId)) {
+        nodeId = `${nodeId}_${index}`
+      }
+      nodeIdSet.add(nodeId)
+      
       return {
-        id: String(node.id),
+        id: nodeId,
         label: wrappedName,
         originalLabel: displayName,
-        nodeType: node.label,
-        size: 70,  // 圆形节点大小
+        nodeType: nodeType,
+        size: 70,
+        properties: node.properties || {},
         style: {
-          fill: nodeColors[node.label] || '#999',
+          fill: nodeColors[nodeType] || '#999',
           stroke: '#fff',
-          lineWidth: 2,
-          shadowBlur: 5,
-          shadowColor: 'rgba(0,0,0,0.3)',
-          cursor: 'pointer'
+          lineWidth: 2
         },
         labelCfg: {
-          style: {
-            fill: '#fff',
-            fontSize: 11,
-            fontWeight: '500',
-            textAlign: 'center',
-            textBaseline: 'middle',
-            lineHeight: 16
-          },
-          position: 'center',
-          offset: [0, 0]
-        },
-        // 自定义图标
-        icon: {
-          show: true,
-          text: nodeIcons[node.label] || '●',
-          style: {
-            fill: '#fff',
-            fontSize: 24,
-            fontWeight: 'bold'
-          }
+          style: { fill: '#fff', fontSize: 11, textAlign: 'center' },
+          position: 'center'
         }
       }
     })
 
-    const edges = data.edges.map(edge => ({
-      id: edge.id,
-      source: String(edge.source),
-      target: String(edge.target),
-      label: edge.label,
-      style: {
-        stroke: '#1890ff',
-        lineWidth: 2,
-        endArrow: {
-          path: G6.Arrow.triangle(8, 6, 0),
-          fill: '#1890ff'
-        }
-      },
-      labelCfg: {
-        autoRotate: true,
-        style: {
-          fill: '#666',
-          fontSize: 10,
-          background: {
-            fill: '#fff',
-            padding: [2, 4, 2, 4],
-            radius: 2,
-            stroke: '#e8edf3'
-          }
-        }
+    const edgeIdSet = new Set()
+    const validEdges = []
+    
+    // 创建节点ID快速查找表
+    const nodeIdMap = new Map()
+    nodes.forEach(node => {
+      nodeIdMap.set(node.id, node)
+      // 如果节点有原始ID，也添加映射
+      if (node.original_id) {
+        nodeIdMap.set(String(node.original_id), node)
       }
-    }))
+    })
+    
+    console.log('节点ID映射:', Array.from(nodeIdMap.keys()))
+    
+    data.edges.forEach((edge, index) => {
+      // 确保边ID唯一
+      let edgeId = edge.id || `edge_${index}`
+      if (edgeIdSet.has(edgeId)) {
+        edgeId = `${edgeId}_${index}`
+      }
+      edgeIdSet.add(edgeId)
+      
+      // 获取源节点和目标节点
+      let sourceId = String(edge.source)
+      let targetId = String(edge.target)
+      
+      // 查找有效的节点ID
+      const sourceNode = nodeIdMap.get(sourceId) || nodeIdMap.get(sourceId.replace(/_\d+$/, ''))
+      const targetNode = nodeIdMap.get(targetId) || nodeIdMap.get(targetId.replace(/_\d+$/, ''))
+      
+      if (sourceNode && targetNode) {
+        validEdges.push({
+          id: edgeId,
+          source: sourceNode.id,
+          target: targetNode.id,
+          label: edge.label || 'UNKNOWN',
+          properties: edge.properties || {},
+          style: { stroke: '#8BAFD4', lineWidth: 2, endArrow: { path: G6.Arrow.triangle(8, 6, 0), fill: '#8BAFD4' } }
+        })
+      } else {
+        console.warn(`跳过无效边 ${edgeId}: source=${sourceId}(${!!sourceNode}), target=${targetId}(${!!targetNode})`)
+      }
+    })
+    
+    console.log(`原始边数: ${data.edges.length}, 有效边数: ${validEdges.length}`)
 
-    renderGraph(nodes, edges)
-    ElMessage.success(`加载了 ${data.nodes.length} 个节点，${data.edges.length} 条关系`)
+    renderGraph(nodes, validEdges)
   } catch (error) {
     console.error('加载图谱数据失败:', error)
-    ElMessage.error('加载图谱数据失败: ' + (error.message || '未知错误'))
   } finally {
     loading.value = false
   }
 }
 
 const renderGraph = (nodes, edges) => {
-  if (graph) {
-    graph.destroy()
-  }
+  if (graph) graph.destroy()
 
   const container = graphRef.value
   if (!container) return
@@ -220,162 +284,83 @@ const renderGraph = (nodes, edges) => {
   const width = container.clientWidth || 800
   const height = container.clientHeight || 500
 
-  // 注册自定义节点类型...
-  // (保持之前的节点注册代码不变)
-
   graph = new G6.Graph({
     container,
     width,
     height,
-    modes: {
-      default: ['drag-canvas', 'zoom-canvas', 'drag-node', 'click-select', 'hover-node']
-    },
+    modes: { default: ['drag-canvas', 'zoom-canvas', 'drag-node'] },
     layout: layouts[layoutType.value],
-    defaultNode: {
-      type: 'circle-with-text',
-      size: 70,
-      style: {
-        fill: '#5B8FF9',
-        stroke: '#fff',
-        lineWidth: 2,
-        shadowBlur: 5,
-        shadowColor: 'rgba(0,0,0,0.3)'
-      },
-      labelCfg: {
-        style: {
-          fill: '#fff',
-          fontSize: 11,
-          fontWeight: '500',
-          textAlign: 'center',
-          textBaseline: 'middle',
-          lineHeight: 16
-        },
-        position: 'center'
-      }
-    },
-    defaultEdge: {
-      type: 'line',
-      style: {
-        stroke: '#1890ff',
-        lineWidth: 2,
-        endArrow: {
-          path: G6.Arrow.triangle(8, 6, 0),
-          fill: '#1890ff'
-        },
-        lineAppendWidth: 8
-      },
-      labelCfg: {
-        autoRotate: true,
-        style: {
-          fill: '#666',
-          fontSize: 10,
-          background: {
-            fill: '#fff',
-            padding: [2, 4, 2, 4],
-            radius: 2,
-            stroke: '#e8edf3'
-          }
-        }
-      }
-    },
-    nodeStateStyles: {
-      hover: {
-        shadowBlur: 15,
-        shadowColor: 'rgba(0,0,0,0.5)',
-        lineWidth: 3,
-        stroke: '#ff9900'
-      },
-      selected: {
-        shadowBlur: 20,
-        shadowColor: 'rgba(24,144,255,0.8)',
-        lineWidth: 3,
-        stroke: '#ff6600'
-      }
-    },
-    edgeStateStyles: {
-      hover: {
-        stroke: '#ff9900',
-        lineWidth: 3
-      },
-      selected: {
-        stroke: '#ff6600',
-        lineWidth: 3
-      }
-    },
-    // 添加这些配置确保所有节点都显示
-    animate: true,
-    animateCfg: {
-      duration: 500,
-      easing: 'easeCubic'
-    },
-    fitView: true,
-    fitViewPadding: [20, 20, 20, 20]
+    defaultNode: { type: 'circle', size: 70, style: { fill: '#7B9ADF', stroke: '#fff', lineWidth: 2 } },
+    defaultEdge: { type: 'line', style: { stroke: '#8BAFD4', lineWidth: 2 } },
+    fitView: true
   })
 
   graph.data({ nodes, edges })
   graph.render()
 
-  // 优化力导向布局的迭代次数
-  if (layoutType.value === 'force') {
-    // 增加迭代次数，让布局充分展开
-    let iterations = 0
-    const maxIterations = 50  // 增加到50次迭代
-
-    const animateLayout = () => {
-      if (iterations < maxIterations) {
-        graph.layout()
-        iterations++
-        setTimeout(animateLayout, 50)
-      } else {
-        // 布局完成后适应画布
-        setTimeout(() => {
-          graph.fitView(30)
-          // 打印实际显示的节点和边数量
-          const nodeCount = graph.getNodes().length
-          const edgeCount = graph.getEdges().length
-          console.log(`布局完成: ${nodeCount} 个节点, ${edgeCount} 条边`)
-        }, 100)
-      }
+  graph.on('node:mouseenter', (evt) => {
+    const node = evt.item.getModel()
+    if (!selectedElement.value) {
+      selectedElement.value = { type: 'node', id: node.id, label: node.nodeType, properties: node.properties }
     }
+  })
 
-    animateLayout()
-  } else {
-    setTimeout(() => {
-      graph.fitView(30)
-    }, 300)
-  }
+  graph.on('node:mouseleave', () => {
+    if (!selectedElement.value?.fixed) selectedElement.value = null
+  })
 
-  // 节点点击事件
   graph.on('node:click', (evt) => {
     const node = evt.item.getModel()
-    const originalName = node.originalLabel || node.label
-    ElMessage.info(`${node.nodeType}: ${originalName}`)
-    console.log('点击节点:', node)
+    selectedElement.value = { type: 'node', id: node.id, label: node.nodeType, properties: node.properties, fixed: true }
   })
 
-  // 边点击事件
+  graph.on('edge:mouseenter', (evt) => {
+    const edge = evt.item.getModel()
+    if (!selectedElement.value) {
+      selectedElement.value = {
+        type: 'edge',
+        id: edge.id,
+        relationType: edge.label,
+        sourceName: getNodeName(edge.source, nodes),
+        targetName: getNodeName(edge.target, nodes),
+        properties: edge.properties
+      }
+    }
+  })
+
+  graph.on('edge:mouseleave', () => {
+    if (!selectedElement.value?.fixed) selectedElement.value = null
+  })
+
   graph.on('edge:click', (evt) => {
     const edge = evt.item.getModel()
-    ElMessage.info(`关系: ${edge.label}`)
-    console.log('点击关系:', edge)
+    selectedElement.value = {
+      type: 'edge',
+      id: edge.id,
+      relationType: edge.label,
+      sourceName: getNodeName(edge.source, nodes),
+      targetName: getNodeName(edge.target, nodes),
+      properties: edge.properties,
+      fixed: true
+    }
   })
 
-  // 调试：打印节点和边数量
-  console.log(`渲染完成: ${nodes.length} 个节点, ${edges.length} 条边`)
+  graph.on('canvas:click', () => {
+    clearSelection()
+  })
+
+  setTimeout(() => graph.fitView(30), 500)
 }
 
 const changeLayout = () => {
   if (!graph) return
+  selectedElement.value = null
   graph.updateLayout(layouts[layoutType.value])
-  setTimeout(() => {
-    graph.fitView(30)
-  }, 100)
+  setTimeout(() => graph.fitView(30), 100)
 }
 
 const fitView = () => {
-  if (graph) {
-    graph.fitView(30)
-  }
+  if (graph) graph.fitView(30)
 }
 
 const resetZoom = () => {
@@ -389,7 +374,6 @@ const refreshData = () => {
   loadData()
 }
 
-// 监听窗口大小变化
 const handleResize = () => {
   if (graph && graphRef.value) {
     const width = graphRef.value.clientWidth
@@ -405,9 +389,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (graph) {
-    graph.destroy()
-  }
+  if (graph) graph.destroy()
   window.removeEventListener('resize', handleResize)
 })
 </script>
@@ -416,17 +398,16 @@ onUnmounted(() => {
 .graph-container {
   position: relative;
   height: 100%;
-  background: linear-gradient(135deg, #f8faff 0%, #f0f2f5 100%);
+  background: #f8faff;
   border-radius: 16px;
   overflow: hidden;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
 }
 
 .graph-header {
   position: absolute;
   top: 16px;
   left: 16px;
-  right: 16px;
+  right: 320px;
   z-index: 10;
   display: flex;
   justify-content: space-between;
@@ -435,14 +416,12 @@ onUnmounted(() => {
   padding: 12px 20px;
   border-radius: 12px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-  backdrop-filter: blur(8px);
 }
 
 .header-left h3 {
   margin: 0 0 4px 0;
   font-size: 16px;
   font-weight: 600;
-  color: #1f2f3d;
 }
 
 .header-left p {
@@ -457,9 +436,137 @@ onUnmounted(() => {
   align-items: center;
 }
 
-.graph-content {
-  width: 100%;
+.main-content {
+  display: flex;
   height: 100%;
+}
+
+.graph-content {
+  flex: 1;
+  height: 100%;
+  padding-top: 70px;
+}
+
+.side-panel {
+  width: 300px;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.95);
+  border-left: 1px solid #e8edf3;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.panel-section {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+
+.panel-section h4 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px dashed #e8edf3;
+}
+
+.stat-label {
+  color: #8c9aa8;
+}
+
+.stat-value {
+  font-weight: 600;
+}
+
+.label-item, .relation-item {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+  gap: 8px;
+}
+
+.label-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.label-name, .relation-name {
+  flex: 1;
+}
+
+.label-count, .relation-count {
+  color: #8c9aa8;
+  font-size: 12px;
+}
+
+.hint-text {
+  margin-top: 16px;
+  padding: 10px;
+  background: #f7fafc;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #64748b;
+  text-align: center;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px dashed #e8edf3;
+}
+
+.detail-label {
+  color: #8c9aa8;
+  font-weight: 500;
+}
+
+.detail-value {
+  color: #1f2f3d;
+  font-weight: 500;
+}
+
+.properties-section {
+  margin-top: 12px;
+}
+
+.properties-header {
+  font-size: 12px;
+  color: #8c9aa8;
+  margin-bottom: 8px;
+}
+
+.property-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.property-key {
+  color: #64748b;
+}
+
+.property-value {
+  color: #1f2f3d;
+  text-align: right;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .loading-overlay {
@@ -471,26 +578,18 @@ onUnmounted(() => {
   color: white;
   padding: 12px 24px;
   border-radius: 32px;
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  z-index: 20;
-  font-size: 14px;
-  backdrop-filter: blur(4px);
 }
 
 .stats {
   position: absolute;
   bottom: 16px;
-  right: 16px;
+  right: 336px;
   z-index: 10;
   display: flex;
-  gap: 8px;
+  gap: 16px;
   background: rgba(255, 255, 255, 0.9);
   padding: 6px 12px;
   border-radius: 20px;
   font-size: 12px;
-  backdrop-filter: blur(4px);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
 }
 </style>

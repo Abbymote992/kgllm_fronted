@@ -37,6 +37,11 @@
           </el-avatar>
         </div>
         <div class="content">
+          <div v-if="msg.mode" class="mode-badge">
+            <el-tag :type="msg.mode === 'multi-agent' ? 'primary' : 'success'" size="small">
+              {{ msg.mode === 'multi-agent' ? '🤖 多智能体' : '💬 流式' }}
+            </el-tag>
+          </div>
           <div class="text">{{ msg.content }}</div>
 
           <div v-if="msg.subgraph && msg.subgraph.nodes && msg.subgraph.nodes.length > 0" class="subgraph">
@@ -53,7 +58,9 @@
             ></div>
           </div>
 
-          <span v-if="msg.isStreaming" class="streaming-cursor">▊</span>
+          <div v-if="msg.isStreaming" class="typing-indicator">
+            <span></span><span></span><span></span>
+          </div>
 
           <div v-if="msg.cypher" class="cypher">
             <div class="cypher-header">
@@ -68,18 +75,40 @@
               <el-step v-for="(step, idx) in msg.steps" :key="idx" :title="step.name" size="small" />
             </el-steps>
           </div>
-        </div>
-      </div>
 
-      <div v-if="loading" class="message assistant">
-        <div class="avatar">
-          <el-avatar :size="36" style="background:#52c41a">AI</el-avatar>
-        </div>
-        <div class="content">
-          <div class="typing">
-            <span></span><span></span><span></span>
+          <!-- 多智能体详情面板 -->
+          <div v-if="msg.mode === 'multi-agent' && msg.agentDetails" class="agent-details">
+            <div class="agent-details-header" @click="toggleAgentDetails(msg.id)">
+              <span>🤖 多智能体执行详情</span>
+              <span class="execution-time">{{ formatTime(msg.agentDetails.executionTime) }}</span>
+              <el-icon :class="{ rotated: expandedAgentDetails === msg.id }">
+                <ArrowDown />
+              </el-icon>
+            </div>
+            <div v-show="expandedAgentDetails === msg.id" class="agent-details-content">
+              <!-- 工作流步骤 -->
+              <div class="workflow-steps">
+                <div class="section-title">执行流程</div>
+                <el-steps :active="msg.agentDetails.workflowSteps.length" finish-status="success" simple>
+                  <el-step 
+                    v-for="(step, idx) in msg.agentDetails.workflowSteps" 
+                    :key="idx" 
+                    :title="step.agent"
+                    :description="step.action"
+                    :status="step.status"
+                  />
+                </el-steps>
+              </div>
+              <!-- 各智能体输出 -->
+              <div class="agent-outputs">
+                <div class="section-title">智能体输出</div>
+                <div v-for="(output, agent) in msg.agentDetails.agentOutputs" :key="agent" class="agent-output-item">
+                  <div class="agent-name">{{ getAgentDisplayName(agent) }}</div>
+                  <div class="agent-output-text">{{ output }}</div>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="loading-text">{{ loadingText }}</div>
         </div>
       </div>
 
@@ -119,7 +148,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ChatDotRound, ArrowDown } from '@element-plus/icons-vue'
 import { kgApi } from '../api'
@@ -136,25 +165,39 @@ const props = defineProps({
 
 const emit = defineEmits(['conversation-saved'])
 
-const exampleQuestions = [
-  '通信卫星平台项目需要什么物料？',
-  '通信卫星平台项目涉及哪些供应商？',
-  'MAT-001物料由哪个供应商提供？',
-  '当前有哪些物料库存不足？',
-  '查询所有延迟的采购订单'
+// 流式模式示例问题
+const streamQuestions = [
+  '什么是齐套率？',
+  '介绍一下供应链管理的基本概念',
+  '物料编码的作用是什么？',
+  '供应商评估的主要指标有哪些？'
 ]
+
+// 多智能体模式示例问题
+const multiAgentQuestions = [
+  '分析东四平台项目的物料齐套情况如何？缺哪些料？',
+  '标准件厂最近交付率低，会对那些项目产生风险？需要预警吗？',
+  '压力传感器严重缺货，现有采购订单无法按时到货，请给出采购建议。',
+  '东四平台项目的陀螺仪目前库存为0，在途订单承诺交期已过，距离投产还有5天，请分析影响、评估风险并给出处理方案。'
+]
+
+// 根据模式动态获取示例问题
+const exampleQuestions = computed(() => {
+  return requestMode.value === 'multi-agent' ? multiAgentQuestions : streamQuestions
+})
 
 const messages = ref([])
 const inputValue = ref('')
 const loading = ref(false)
 const loadingText = ref('准备就绪...')
-const requestMode = ref('sync')
+const requestMode = ref('stream')
 const messagesRef = ref(null)
 const bottomRef = ref(null)
 const currentConversationId = ref(null)
 const subgraphRefs = ref({})
 const expandedSubgraph = ref(null)
 const subgraphInstances = ref({})
+const expandedAgentDetails = ref(null)
 
 // 多智能体状态
 const agentsStatus = ref({
@@ -236,18 +279,16 @@ const fetchSubgraph = async (cypher) => {
   if (!cypher) return null
   try {
     const subgraphCypher = `
-      MATCH path = (n)-[r]->(m)
-      WHERE EXISTS {
-        MATCH (q)-[rel]-(w)
-        WHERE n.id = q.id OR m.id = w.id
-        AND (q:Project OR q:Material OR q:Supplier)
-      }
+      MATCH (n)-[r]-(m)
+      WHERE (n:Project OR n:Material OR n:Supplier OR n:Inventory OR n:PurchaseOrder OR n:WorkOrder)
+        AND (m:Project OR m:Material OR m:Supplier OR m:Inventory OR m:PurchaseOrder OR m:WorkOrder)
       RETURN n, r, m
-      LIMIT 30
+      LIMIT 100
     `
     const res = await kgApi.executeQuery({ cypher: subgraphCypher })
-    if (res.data && res.data.length > 0) {
-      return convertToGraphData(res.data)
+    console.log('图谱查询结果:', res)
+    if (res.data && res.data.success && res.data.data && res.data.data.length > 0) {
+      return convertToGraphData(res.data.data)
     }
   } catch (error) {
     console.error('获取子图失败:', error)
@@ -258,31 +299,85 @@ const fetchSubgraph = async (cypher) => {
 const convertToGraphData = (data) => {
   const nodesMap = new Map()
   const edges = []
+  const edgeIdMap = new Map()
+  let edgeIndex = 0
+  
+  console.log('原始数据:', data)
+  
   data.forEach(record => {
-    if (record.n && !nodesMap.has(record.n.id)) {
-      const labels = record.n.labels || []
-      nodesMap.set(record.n.id, {
-        id: record.n.id,
-        label: record.n.properties?.name || labels[0] || 'Unknown',
-        nodeType: labels[0] || 'Unknown'
-      })
+    // 处理源节点 n
+    if (record.n) {
+      processNode(record.n)
     }
-    if (record.m && !nodesMap.has(record.m.id)) {
-      const labels = record.m.labels || []
-      nodesMap.set(record.m.id, {
-        id: record.m.id,
-        label: record.m.properties?.name || labels[0] || 'Unknown',
-        nodeType: labels[0] || 'Unknown'
-      })
+    
+    // 处理目标节点 m
+    if (record.m) {
+      processNode(record.m)
     }
+    
+    // 处理关系 r
     if (record.r) {
-      edges.push({
-        source: String(record.r.start),
-        target: String(record.r.end),
-        label: record.r.type
-      })
+      processRelationship(record.r)
+    }
+    
+    // 兼容后端返回的字典格式（每个记录就是一个节点或关系）
+    // 如果记录本身有 labels 或 type 字段，说明是直接返回的节点/边
+    if (record.labels || record.type) {
+      if (record.source === undefined) {
+        // 这是一个节点
+        processNode(record)
+      } else {
+        // 这是一条边
+        processRelationship(record)
+      }
     }
   })
+  
+  function processNode(node) {
+    const nodeId = node.id
+    if (!nodesMap.has(nodeId)) {
+      const labels = node.labels || []
+      const props = node.properties || node
+      const nodeType = labels[0] || node.type || 'Unknown'
+      const label = props.name || props.label || nodeType || 'Unknown'
+      nodesMap.set(nodeId, {
+        id: nodeId,
+        label: label,
+        nodeType: nodeType
+      })
+      console.log(`添加节点: ${nodeId} - ${label} (${nodeType})`)
+    }
+  }
+  
+  function processRelationship(rel) {
+    const source = String(rel.start !== undefined ? rel.start : rel.source)
+    const target = String(rel.end !== undefined ? rel.end : rel.target)
+    const relType = rel.type || rel.label || 'UNKNOWN'
+    const relId = rel.id || `${source}_${target}_${relType}_${edgeIndex++}`
+    
+    // 确保源节点和目标节点存在
+    if (!nodesMap.has(source)) {
+      nodesMap.set(source, { id: source, label: `Node_${source}`, nodeType: 'Unknown' })
+    }
+    if (!nodesMap.has(target)) {
+      nodesMap.set(target, { id: target, label: `Node_${target}`, nodeType: 'Unknown' })
+    }
+    
+    // 避免重复边
+    const edgeKey = `${source}_${target}_${relType}_${relId}`
+    if (!edgeIdMap.has(edgeKey)) {
+      edgeIdMap.set(edgeKey, true)
+      edges.push({
+        id: relId,
+        source: source,
+        target: target,
+        label: relType
+      })
+      console.log(`添加边: ${source} -> ${target} (${relType})`)
+    }
+  }
+  
+  console.log(`图谱数据转换完成: ${nodesMap.size} 个节点, ${edges.length} 条边`)
   return { nodes: Array.from(nodesMap.values()), edges }
 }
 
@@ -311,7 +406,13 @@ const renderSubgraph = (msgId, graphData) => {
     }
   })
   const nodes = graphData.nodes.map(node => ({ id: String(node.id), label: node.label, nodeType: node.nodeType }))
-  const edges = graphData.edges.map(edge => ({ id: `${edge.source}_${edge.target}`, source: String(edge.source), target: String(edge.target), label: edge.label }))
+  const edges = graphData.edges.map((edge, index) => ({ 
+    id: edge.id || `edge_${index}_${edge.source}_${edge.target}`, 
+    source: String(edge.source), 
+    target: String(edge.target), 
+    label: edge.label 
+  }))
+  console.log(`渲染图谱: ${nodes.length} 个节点, ${edges.length} 条边`)
   graph.data({ nodes, edges })
   graph.render()
   graph.fitView(20)
@@ -332,6 +433,21 @@ const toggleSubgraph = (msgId) => {
       if (msg && msg.subgraph) { renderSubgraph(msgId, msg.subgraph) }
     }, 100)
   }
+}
+
+const toggleAgentDetails = (msgId) => {
+  if (expandedAgentDetails.value === msgId) {
+    expandedAgentDetails.value = null
+  } else {
+    expandedAgentDetails.value = msgId
+  }
+}
+
+const formatTime = (ms) => {
+  if (!ms) return '0ms'
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.floor(ms / 60000)}m ${((ms % 60000) / 1000).toFixed(1)}s`
 }
 
 const resetAgentStatus = () => {
@@ -355,7 +471,18 @@ const sendMultiAgentMessage = async (question) => {
   showAgentPanel.value = true
   const startTime = Date.now()
   const msgId = Date.now() + 1
-  const streamingMsg = { id: msgId, role: 'assistant', content: '', isStreaming: true, agentDetails: null }
+  const streamingMsg = { 
+    id: msgId, 
+    role: 'assistant', 
+    content: '', 
+    isStreaming: true, 
+    mode: 'multi-agent',
+    agentDetails: {
+      workflowSteps: [],
+      agentOutputs: {},
+      executionTime: 0
+    }
+  }
   messages.value.push(streamingMsg)
   await scrollToBottom()
   try {
@@ -363,20 +490,49 @@ const sendMultiAgentMessage = async (question) => {
       onAgentStart: (agent, message) => {
         agentsStatus.value[agent] = 'running'
         currentStep.value = message
-        workflowSteps.value.push({ agent: getAgentDisplayName(agent), action: message, status: 'running' })
+        const step = { agent: getAgentDisplayName(agent), action: message, status: 'running' }
+        workflowSteps.value.push(step)
         agentOutputs.value[agent] = '执行中...'
         loadingText.value = message
+        
+        // 保存到消息中
+        const msg = messages.value.find(m => m.id === msgId)
+        if (msg && msg.agentDetails) {
+          msg.agentDetails.workflowSteps.push({...step})
+        }
       },
       onAgentComplete: (agent, result) => {
         agentsStatus.value[agent] = 'completed'
         const step = workflowSteps.value.find(s => s.agent === getAgentDisplayName(agent))
         if (step) step.status = 'completed'
         agentOutputs.value[agent] = result?.substring?.(0, 100) || '完成'
+        
+        // 更新消息中的状态
+        const msg = messages.value.find(m => m.id === msgId)
+        if (msg && msg.agentDetails) {
+          const msgStep = msg.agentDetails.workflowSteps.find(s => s.agent === getAgentDisplayName(agent))
+          if (msgStep) msgStep.status = 'completed'
+          msg.agentDetails.agentOutputs[agent] = result
+        }
       },
-      onAgentOutput: (agent, output) => { agentOutputs.value[agent] = output },
+      onAgentOutput: (agent, output) => { 
+        agentOutputs.value[agent] = output 
+        // 更新消息中的输出
+        const msg = messages.value.find(m => m.id === msgId)
+        if (msg && msg.agentDetails) {
+          msg.agentDetails.agentOutputs[agent] = output
+        }
+      },
       onComplete: (answer, details) => {
         const msg = messages.value.find(m => m.id === msgId)
-        if (msg) { msg.content = answer; msg.isStreaming = false; msg.agentDetails = details }
+        if (msg) { 
+          msg.content = answer; 
+          msg.isStreaming = false; 
+          msg.agentDetails.executionTime = Date.now() - startTime
+          if (details) {
+            msg.agentDetails.intermediateResults = details
+          }
+        }
         loading.value = false
         executionTime.value = Date.now() - startTime
         ElMessage.success(`多智能体协作完成，耗时 ${executionTime.value}ms`)
@@ -401,7 +557,7 @@ const sendStreamMessage = async (question) => {
   loading.value = true
   loadingText.value = '正在理解问题...'
   const msgId = Date.now() + 1
-  const streamingMsg = { id: msgId, role: 'assistant', content: '', isStreaming: true, cypher: null, subgraph: null }
+  const streamingMsg = { id: msgId, role: 'assistant', content: '', isStreaming: true, cypher: null, subgraph: null, mode: 'stream' }
   messages.value.push(streamingMsg)
   await scrollToBottom()
   let finalCypher = null
@@ -609,16 +765,10 @@ defineExpose({ loadConversation, saveCurrentConversation, newConversation, clear
   white-space: pre-wrap;
   word-break: break-word;
 }
-.streaming-cursor {
-  display: inline-block;
-  animation: blink 1s infinite;
-  margin-left: 2px;
-  font-weight: bold;
+.mode-badge {
+  margin-bottom: 8px;
 }
-@keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
-}
+
 .subgraph {
   margin-top: 16px;
   border-top: 1px solid #e8edf3;
@@ -714,6 +864,24 @@ defineExpose({ loadConversation, saveCurrentConversation, newConversation, clear
   font-size: 12px;
   color: #8c9aa8;
   margin-top: 8px;
+}
+.typing-indicator {
+  display: flex;
+  gap: 4px;
+  padding: 8px 0;
+}
+.typing-indicator span {
+  width: 8px;
+  height: 8px;
+  background: #8c9aa8;
+  border-radius: 50%;
+  animation: typing 1.4s infinite;
+}
+.typing-indicator span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.typing-indicator span:nth-child(3) {
+  animation-delay: 0.4s;
 }
 .chat-input {
   padding: 20px 24px;
